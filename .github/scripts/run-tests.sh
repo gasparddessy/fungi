@@ -372,16 +372,20 @@ grep -q "secrets.SFTP_REMOTE_PLUGIN_PATH" .github/workflows/deploy.yml || fail "
 pass=$((pass + 1))
 
 grep -q '^Theme Name: Refungi Child$' themes/refungi-child/style.css || fail "theme name header missing"
-grep -q '^Template: PARENT_THEME_SLUG$' themes/refungi-child/style.css || fail "parent template placeholder missing"
+grep -q '^Template: bridge$' themes/refungi-child/style.css || fail "parent template is not bridge"
+grep -q 'stylesheet.min.css' themes/refungi-child/functions.php || fail "child theme does not enqueue the Bridge stylesheet"
 grep -q 'prod hero still says PERMAFUNGI' themes/refungi-child/assets/css/overrides.css || fail "overrides reminder missing"
 grep -q 'wp_enqueue_style' themes/refungi-child/functions.php || fail "child theme does not enqueue styles"
+if grep -R -n 'PARENT_THEME_SLUG' themes plugins README.md; then
+	fail "PARENT_THEME_SLUG is still documented as the template"
+fi
 grep -q 'Plugin Name: Refungi Custom' plugins/refungi-custom/refungi-custom.php || fail "plugin header missing"
 test -f themes/refungi-child/assets/js/.gitkeep || fail ".gitkeep missing"
 
 for secret_name in SFTP_HOST SFTP_PORT SFTP_USER SFTP_PASSWORD SFTP_KEY SFTP_REMOTE_THEME_PATH SFTP_REMOTE_PLUGIN_PATH; do
 	grep -q "$secret_name" README.md || fail "README does not document ${secret_name}"
 done
-grep -q "PARENT_THEME_SLUG" README.md || fail "README does not explain the parent slug TODO"
+grep -q '^Template: bridge$' README.md || fail "README does not record Template: bridge"
 grep -q "JetBackup" README.md || fail "README does not mention JetBackup"
 pass=$((pass + 1))
 
