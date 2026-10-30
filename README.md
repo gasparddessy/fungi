@@ -49,34 +49,29 @@ These tools work on this repository the same way a person does:
 3. Open a pull request. Merging to `main` is what deploys.
 4. Treat Git as the source of truth. Do not edit production over SFTP and leave the repo behind.
 
-They must not commit credentials, WordPress core, uploads, `wp-config.php`, commercial plugins, or the parent theme. They must not invent the parent theme directory name. Secrets are typed into GitHub by Gaspard or Chris (Settings → Secrets and variables → Actions). They are not written into files, pull requests, or chat.
+They must not commit credentials, WordPress core, uploads, `wp-config.php`, commercial plugins, or the Bridge parent theme. Secrets are typed into GitHub by Gaspard or Chris (Settings → Secrets and variables → Actions). They are not written into files, pull requests, or chat.
 
-## Parent theme slug
+## Parent theme
 
 `themes/refungi-child/style.css` contains:
 
 ```text
-Template: PARENT_THEME_SLUG
+Template: bridge
 ```
 
-That is a TODO. WordPress needs the parent theme's **directory** name (the folder under `wp-content/themes/`), not the name shown in the admin. Until it matches a real folder, the parent is missing and this theme must stay inactive.
+`bridge` is the parent directory (`wp-content/themes/bridge`), confirmed from the live homepage body class `wp-theme-bridge`. The child theme that is active today is `bridge-child`. This repository's theme folder is `refungi-child`. Deploying it does not replace `bridge` or `bridge-child`.
 
-How to confirm the slug:
+Bridge's own `style.css` is a placeholder. The visual CSS is `wp-content/themes/bridge/css/stylesheet.min.css`. The child `functions.php` enqueues that parent file, then `themes/refungi-child/style.css`, then `assets/css/overrides.css`.
 
-1. On the server, open `wp-content/themes/` and read the parent directory name.
-2. The public homepage currently marks the active theme in the body class as `wp-theme-bridge` and the active child as `wp-child-theme-bridge-child`. A prefetch hint lists `wp-content/themes/bridge/` and `wp-content/themes/bridge-child/`. Treat that as a lead to confirm in the file manager, not as a value already written into `style.css`.
-
-Do not commit the Bridge parent or replace `bridge-child` by deploying over it. This workflow refuses remote paths that do not end in `refungi-child` or `refungi-custom`.
-
-If the current child theme has templates or PHP you still need, copy those into `themes/refungi-child/` in a later pull request **before** activating Refungi Child. This first version does not import that code.
+Do not commit the Bridge parent. If `bridge-child` has templates or PHP you still need, copy them into `themes/refungi-child/` before activating Refungi Child. This theme does not import that code.
 
 ## Activate the child theme after deploy
 
-Do this only after the Template header is the real parent directory, a backup exists, and you have looked at the result on staging if you have one.
+Take a backup, and look at a staging copy first if you have one, before activating on production.
 
-1. Confirm the GitHub deploy for `main` is green and the folder `wp-content/themes/refungi-child` is on the server.
+1. Confirm the GitHub deploy for `main` is green and the folder `wp-content/themes/refungi-child` is on the server. `wp-content/themes/bridge` must still be there too.
 2. In wp-admin, go to **Appearance → Themes**.
-3. If Refungi Child says the parent theme is missing, stop and fix `Template:` in `style.css`. Do not activate it.
+3. If Refungi Child says the parent theme is missing, stop. `Template` must stay `bridge`, and the Bridge folder must remain installed.
 4. Activate **Refungi Child**. The previous theme files stay on disk. You can switch back from the same screen.
 5. Check the homepage, a shop page, and each language the site serves.
 6. Purge the site cache. The public homepage is served with minified CSS from `wp-content/cache/`, so a stylesheet deploy can look unchanged until that cache is cleared.
