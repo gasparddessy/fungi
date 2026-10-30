@@ -1,0 +1,27 @@
+/*
+Theme Name: Refungi Child
+Theme URI: https://refungi.be
+Description: Child theme for the Refungi WooCommerce site (ex-PermaFungi). Presentation tweaks live here. WordPress core and the commercial parent theme stay on the server.
+Author: Refungi
+Author URI: https://refungi.be
+Template: PARENT_THEME_SLUG
+Version: 0.1.0
+Requires at least: 6.4
+Tested up to: 6.8
+Requires PHP: 7.4
+License: GNU General Public License v2 or later
+License URI: https://www.gnu.org/licenses/gpl-2.0.html
+Text Domain: refungi-child
+*/
+
+/*
+ * TODO: Replace PARENT_THEME_SLUG above with the parent theme directory name
+ * (the folder inside wp-content/themes/, not the label shown in wp-admin).
+ * Confirm that folder on the server before activating this theme. Do not guess.
+ * The live parent may be commercial or custom — never commit it to this repo.
+ *
+ * Until this header matches a real parent directory, WordPress reports the
+ * parent as missing. Leave the theme inactive until the slug is filled in.
+ *
+ * Site CSS overrides belong in assets/css/overrides.css.
+ */
