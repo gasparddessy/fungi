@@ -1,0 +1,3 @@
+# Front-end scripts for the child theme go in this directory.
+# Enqueue a file from themes/refungi-child/functions.php when one is added.
+# Do not add a script here that runs before that enqueue exists.

@@ -1,0 +1,25 @@
+/*
+Theme Name: Refungi Child
+Theme URI: https://refungi.be
+Description: Custom CSS and PHP for Refungi (ex-PermaFungi). TODO(Gaspard/Chris): replace Template PARENT_THEME_SLUG with the parent theme directory name before activation. The placeholder is not a real theme.
+Author: Refungi
+Template: PARENT_THEME_SLUG
+Version: 0.1.0
+Text Domain: refungi-child
+*/
+
+/*
+ * TODO(Gaspard/Chris): the Template line above must be the parent theme's
+ * directory slug (the folder name inside wp-content/themes/), then this
+ * file should be deployed again.
+ *
+ * Public HTML on https://refungi.be (2026-10-30) reports body classes
+ * wp-theme-bridge and wp-child-theme-bridge-child, plus prefetch exclusions
+ * for /wp-content/themes/bridge/ and /wp-content/themes/bridge-child/.
+ * Confirm that directory on the server or in wp-admin before replacing
+ * PARENT_THEME_SLUG. Do not overwrite the live bridge-child folder with
+ * this theme; this child lives in its own directory, refungi-child.
+ *
+ * Visual overrides belong in assets/css/custom.css, which functions.php
+ * enqueues after this file.
+ */

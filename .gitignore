@@ -1,0 +1,45 @@
+# macOS / editors
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# Secrets and local environment. Never commit hosting passwords.
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+id_rsa
+id_ed25519
+wp-config.php
+wp-config-local.php
+auth.json
+.ftp-deploy-sync-state.json
+.lftp/
+known_hosts
+
+# PHP / JS dependencies (this repo has none yet)
+node_modules/
+vendor/
+
+# Logs, database dumps, backup archives
+*.log
+*.sql
+*.sql.gz
+*.wpress
+
+# WordPress core, uploads, and commercial plugins do not belong in this repo.
+# If a full tree is copied in by mistake, keep it untracked.
+/wp-admin/
+/wp-includes/
+/wp-content/
+/wp-*.php
+/xmlrpc.php
+/index.php
+/license.txt
+/readme.html
+/local-config.php

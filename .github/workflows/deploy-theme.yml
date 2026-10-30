@@ -1,0 +1,97 @@
+# Manual SFTP deploy of the child theme only.
+#
+# This workflow does not run on push or pull_request. It stays idle until
+# someone runs it from the Actions tab after repository secrets exist.
+#
+# Required secrets (Settings → Secrets and variables → Actions):
+#   SFTP_HOST         SSH/SFTP hostname. Often obsidienne.o2switch.net — confirm in cPanel.
+#   SFTP_USER         cPanel user. Expected value: crch2121.
+#   SFTP_PASS         SSH/SFTP password. Never put this in the repo.
+#   SFTP_REMOTE_PATH  Absolute path of THIS child theme on the server, for example
+#                     /home/crch2121/<document-root>/wp-content/themes/refungi-child
+#                     Confirm the document root in cPanel before the first upload.
+#
+# Port 22 is assumed (o2switch SSH/SFTP). Change SFTP_PORT below if the host differs.
+# "Upload files" defaults to false: the run connects and prints a dry run.
+# The first connection accepts the server host key (runners are ephemeral).
+
+name: Deploy child theme (manual SFTP)
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: "Upload themes/refungi-child. Leave false for a dry run."
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-refungi-child
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: SFTP sync themes/refungi-child
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check required secrets
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_USER: ${{ secrets.SFTP_USER }}
+          SFTP_PASS: ${{ secrets.SFTP_PASS }}
+          SFTP_REMOTE_PATH: ${{ secrets.SFTP_REMOTE_PATH }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in SFTP_HOST SFTP_USER SFTP_PASS SFTP_REMOTE_PATH; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing GitHub Actions secret: ${name}"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Add the secrets in Settings → Secrets and variables → Actions. Do not commit them."
+            exit 1
+          fi
+
+      - name: Install lftp
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y lftp
+
+      - name: Sync child theme over SFTP
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_USER: ${{ secrets.SFTP_USER }}
+          SFTP_PASS: ${{ secrets.SFTP_PASS }}
+          SFTP_REMOTE_PATH: ${{ secrets.SFTP_REMOTE_PATH }}
+          UPLOAD: ${{ inputs.upload }}
+          SFTP_PORT: "22"
+        run: |
+          set -euo pipefail
+          export LFTP_PASSWORD="$SFTP_PASS"
+          mirror_args=(--reverse --verbose)
+          if [ "$UPLOAD" != "true" ]; then
+            mirror_args+=(--dry-run)
+            echo "Dry run only. Run the workflow again with “Upload files” enabled to write to the server."
+          else
+            echo "Uploading themes/refungi-child (no remote delete)."
+          fi
+          # Quotes around the remote path must survive into the lftp script.
+          lftp --env-password -u "$SFTP_USER" -p "$SFTP_PORT" "sftp://${SFTP_HOST}" <<EOF
+          set cmd:fail-exit yes
+          set sftp:auto-confirm yes
+          set net:max-retries 2
+          set net:timeout 20
+          mirror ${mirror_args[*]} themes/refungi-child "${SFTP_REMOTE_PATH}"
+          bye
+          EOF

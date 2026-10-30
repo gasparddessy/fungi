@@ -1,0 +1,20 @@
+/*
+ * Hero still shows PERMAFUNGI on prod — overrides go here.
+ *
+ * Checked 2026-10-30 on https://refungi.be: the homepage slider copy is
+ * already partly Refungi, but PermaFungi remains on hero-era media (for
+ * example wp-content/uploads/2019/03/champost-PermaFungi.jpg) and in the
+ * cookie banner app id (wwwpermafungibe). Put visual overrides in this
+ * file. Slider wording and images are content: change those in wp-admin,
+ * not only with CSS.
+ *
+ * This file is enqueued by functions.php after the parent and child
+ * stylesheets. The public homepage is served from a minify cache under
+ * wp-content/cache/minify/, so purge that cache after a deploy or the
+ * new rules will not appear.
+ */
+
+/* Example, left inactive until a selector is confirmed on staging:
+.q_slide_title {
+}
+*/
