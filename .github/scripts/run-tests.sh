@@ -559,11 +559,67 @@ grep -q 'mirror --reverse --delete' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror is 
 grep -q -- '--exclude-glob node_modules/' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror does not exclude node_modules"
 grep -q -- '--exclude-glob .git/' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror does not exclude .git"
 grep -q -- '--exclude-glob .github/' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror does not exclude .github"
-grep -F -q '/home/crch2121/public_html/wp-content/themes/refungi-child/' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror target is not the child theme"
-grep -F -q '/home/crch2121/public_html/wp-content/plugins/refungi-custom/' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror target is not the custom plugin"
+grep -F -q 'cd "public_html/wp-content/themes"' "$FAKE_LFTP_SCRIPTS" || fail "FTP did not cd to the login-root theme parent"
+grep -F -q 'public_html/wp-content/themes/refungi-child/' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror target is not the child theme relative to the login root"
+grep -F -q 'public_html/wp-content/plugins/refungi-custom/' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror target is not the custom plugin relative to the login root"
+grep -F -q 'cd "/home/' "$FAKE_LFTP_SCRIPTS" && fail "FTP cd used an absolute /home path"
 grep -F -q 'themes/refungi-child/' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror source is not the child theme"
 grep -q 'mkdir ' "$FAKE_LFTP_SCRIPTS" && fail "FTP mkdir ran for directories that already exist"
 grep -q -- '--env-password' "$FAKE_LFTP_ARGS" || fail "lftp was not started with --env-password"
+pass=$((pass + 1))
+
+: >"$FAKE_LFTP_ARGS"
+: >"$FAKE_LFTP_SCRIPTS"
+: >"$FAKE_LFTP_CALLS"
+: >"$FAKE_LFTP_NOTES"
+env \
+	LFTP_BIN="$fake_bin/lftp" \
+	FAKE_LFTP_MODE="dir" \
+	FAKE_LFTP_ARGS="$FAKE_LFTP_ARGS" \
+	FAKE_LFTP_SCRIPTS="$FAKE_LFTP_SCRIPTS" \
+	FAKE_LFTP_CALLS="$FAKE_LFTP_CALLS" \
+	FAKE_LFTP_NOTES="$FAKE_LFTP_NOTES" \
+	FAKE_LFTP_SECRET="$secret_password" \
+	SFTP_HOST="crch2121.odns.fr" \
+	SFTP_PORT="21" \
+	SFTP_USER="crch2121" \
+	SFTP_PASSWORD="$secret_password" \
+	THEME_PATH="public_html/wp-content/themes/refungi-child" \
+	PLUGIN_PATH="public_html/wp-content/plugins/refungi-custom" \
+	DEPLOY_PLUGIN="true" \
+	bash "$script_dir/ftp-password-deploy.sh" >/dev/null
+grep -F -q 'cd "public_html/wp-content/themes"' "$FAKE_LFTP_SCRIPTS" || fail "relative FTP theme path was rewritten"
+grep -F -q 'cd "/home/' "$FAKE_LFTP_SCRIPTS" && fail "relative FTP path gained an /home prefix"
+grep -F -q '/home/crch2121/' "$FAKE_LFTP_SCRIPTS" && fail "relative FTP path was joined to /home/crch2121"
+pass=$((pass + 1))
+
+: >"$FAKE_LFTP_ARGS"
+: >"$FAKE_LFTP_SCRIPTS"
+: >"$FAKE_LFTP_CALLS"
+: >"$FAKE_LFTP_NOTES"
+set +e
+other_home_err=$(
+	env \
+		LFTP_BIN="$fake_bin/lftp" \
+		FAKE_LFTP_MODE="dir" \
+		FAKE_LFTP_ARGS="$FAKE_LFTP_ARGS" \
+		FAKE_LFTP_SCRIPTS="$FAKE_LFTP_SCRIPTS" \
+		FAKE_LFTP_CALLS="$FAKE_LFTP_CALLS" \
+		FAKE_LFTP_NOTES="$FAKE_LFTP_NOTES" \
+		FAKE_LFTP_SECRET="$secret_password" \
+		SFTP_HOST="crch2121.odns.fr" \
+		SFTP_PORT="21" \
+		SFTP_USER="crch2121" \
+		SFTP_PASSWORD="$secret_password" \
+		THEME_PATH="/home/someoneelse/public_html/wp-content/themes/refungi-child" \
+		DEPLOY_PLUGIN="false" \
+		bash "$script_dir/ftp-password-deploy.sh" 2>&1
+)
+other_home_status=$?
+set -e
+[ "$other_home_status" -ne 0 ] || fail "FTP deploy accepted another account's /home path"
+printf '%s' "$other_home_err" | grep -q "FTP login root" || fail "other-home error did not mention the FTP login root"
+[ ! -s "$FAKE_LFTP_ARGS" ] || fail "other-home path still invoked lftp"
 pass=$((pass + 1))
 
 run_fake_ftp plugin-missing >/dev/null
@@ -705,8 +761,11 @@ done
 grep -q '^Template: bridge$' README.md || fail "README does not record Template: bridge"
 grep -q "JetBackup" README.md || fail "README does not mention JetBackup"
 grep -q 'crch2121.odns.fr' README.md || fail "README does not document the FTP host"
-grep -q '/home/crch2121/public_html/wp-content/themes/refungi-child' README.md || fail "README does not document the live theme path"
-grep -q '/home/crch2121/public_html/wp-content/plugins/refungi-custom' README.md || fail "README does not document the live plugin path"
+grep -q '/home/crch2121/public_html/wp-content/themes/refungi-child' README.md || fail "README does not document the SSH theme path"
+grep -q '/home/crch2121/public_html/wp-content/plugins/refungi-custom' README.md || fail "README does not document the SSH plugin path"
+grep -q 'public_html/wp-content/themes/refungi-child' README.md || fail "README does not document the FTP theme path"
+grep -q 'public_html/wp-content/plugins/refungi-custom' README.md || fail "README does not document the FTP plugin path"
+grep -q 'FTP login root' README.md || fail "README does not say FTP paths are relative to the login root"
 grep -q 'plain FTP' README.md || fail "README does not document plain FTP on port 21"
 pass=$((pass + 1))
 
@@ -742,7 +801,8 @@ server = FTPServer(("127.0.0.1", 0), handler)
 print(server.socket.getsockname()[1], flush=True)
 server.serve_forever()
 PY
-	python3 "$tmp/ftpd.py" "$ftp_root" "$tmp/ftp-password" >"$tmp/ftp-port" 2>"$tmp/ftpd.log" &
+	# Jail the test server at the account home, which is what o2switch FTP does.
+	python3 "$tmp/ftpd.py" "$ftp_root/home/crch2121" "$tmp/ftp-password" >"$tmp/ftp-port" 2>"$tmp/ftpd.log" &
 	ftp_pid=$!
 	for _ in $(seq 1 50); do
 		if [ -s "$tmp/ftp-port" ] && grep -Eq '^[0-9]+$' "$tmp/ftp-port"; then
@@ -780,7 +840,7 @@ PY
 
 	bare_root="$tmp/bare-ftproot"
 	mkdir -p "$bare_root/home/crch2121/public_html/wp-content"
-	python3 "$tmp/ftpd.py" "$bare_root" "$tmp/ftp-password" >"$tmp/ftp-port-bare" 2>"$tmp/ftpd-bare.log" &
+	python3 "$tmp/ftpd.py" "$bare_root/home/crch2121" "$tmp/ftp-password" >"$tmp/ftp-port-bare" 2>"$tmp/ftpd-bare.log" &
 	ftp_pid=$!
 	for _ in $(seq 1 50); do
 		if [ -s "$tmp/ftp-port-bare" ] && grep -Eq '^[0-9]+$' "$tmp/ftp-port-bare"; then
