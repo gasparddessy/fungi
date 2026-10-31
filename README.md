@@ -105,8 +105,8 @@ Create **repository** secrets (not files in Git):
 | `SFTP_USER` | Yes | cPanel user |
 | `SFTP_KEY` | Preferred on port 22 | Private key of a deploy keypair. Full PEM or OpenSSH block, **no passphrase**. Ignored when `SFTP_PORT` is `21` |
 | `SFTP_PASSWORD` | Required on port 21 | cPanel account password. On port 22 it is used only when `SFTP_KEY` is empty |
-| `SFTP_REMOTE_THEME_PATH` | Yes | Must end with `wp-content/themes/refungi-child` |
-| `SFTP_REMOTE_PLUGIN_PATH` | No | Must end with `wp-content/plugins/refungi-custom` when set. If omitted, the plugin is not deployed |
+| `SFTP_REMOTE_THEME_PATH` | Yes | Must end with `wp-content/themes/refungi-child`. On port 21 this is relative to the FTP login root. On port 22 an absolute filesystem path is correct |
+| `SFTP_REMOTE_PLUGIN_PATH` | No | Must end with `wp-content/plugins/refungi-custom` when set. Same path rule as the theme. If omitted, the plugin is not deployed |
 
 ### This site, while SSH is blocked
 
@@ -121,12 +121,14 @@ Set these repository secrets for the FTP deploy. Do not put the password in Git,
 | `SFTP_USER` | `crch2121` |
 | `SFTP_PASSWORD` | The cPanel account password. It is not written down in this repository |
 | `SFTP_KEY` | Leave empty |
-| `SFTP_REMOTE_THEME_PATH` | `/home/crch2121/public_html/wp-content/themes/refungi-child` |
-| `SFTP_REMOTE_PLUGIN_PATH` | `/home/crch2121/public_html/wp-content/plugins/refungi-custom` |
+| `SFTP_REMOTE_THEME_PATH` | `public_html/wp-content/themes/refungi-child` |
+| `SFTP_REMOTE_PLUGIN_PATH` | `public_html/wp-content/plugins/refungi-custom` |
+
+Port 21 paths are relative to the FTP login root. o2switch chroots that login to the account home, so `/home/crch2121/public_html/...` is not a directory the FTP session can open (`550 No such file or directory`). Do not put `/home/USER/` in `SFTP_REMOTE_THEME_PATH` or `SFTP_REMOTE_PLUGIN_PATH` for this port.
+
+If a secret still has the SSH form `/home/crch2121/public_html/...`, the FTP job drops the `/home/crch2121/` prefix and syncs `public_html/...`. The value to store is the relative path.
 
 The theme directory is already on the server. The plugin directory is created on the first deploy when `wp-content/plugins` already exists. The job does not create `wp-content`, `themes`, or `plugins`, and it does not upload WordPress.
-
-If the FTP session is rooted at the home directory and the absolute path is rejected, store the same location without the home prefix: `public_html/wp-content/themes/refungi-child` and `public_html/wp-content/plugins/refungi-custom`. Both forms have to end with the Refungi directory name.
 
 ### When port 22 is reachable
 
@@ -140,9 +142,15 @@ ssh-keygen -m PEM -t rsa -b 4096 -N "" -C "refungi-github-deploy" -f refungi-dep
 
 The first successful SSH deploy can create the `refungi-child` folder itself, but only when `wp-content/themes` already exists. The server-side check resolves the path and refuses the sync unless the real directory still ends with `wp-content/themes/refungi-child`.
 
+Port 22 sees the real filesystem, so the absolute paths are the ones to store:
+
+- `SFTP_REMOTE_THEME_PATH` = `/home/crch2121/public_html/wp-content/themes/refungi-child`
+- `SFTP_REMOTE_PLUGIN_PATH` = `/home/crch2121/public_html/wp-content/plugins/refungi-custom`
+
 ### What the job syncs
 
-- **Port 21** (`SFTP_PASSWORD`): plain FTP with `lftp`. `mirror --reverse --delete` runs only inside the validated theme directory, then inside the plugin directory when that secret is set. Files removed from Git are removed there. `bridge`, `bridge-child`, and the rest of `wp-content` are not mirror targets.
+- **Port 21** (`SFTP_PASSWORD`): plain FTP with `lftp`. Paths are relative to the FTP login root (`public_html/...`). `mirror --reverse --delete` runs only inside the validated theme directory, then inside the plugin directory when that secret is set. Files removed from Git are removed there. `bridge`, `bridge-child`, and the rest of `wp-content` are not mirror targets.
+- **Port 22** keeps absolute filesystem paths such as `/home/crch2121/public_html/wp-content/themes/refungi-child`. The FTP chroot rewrite does not apply.
 - **Port 22, key** (`SFTP_KEY`): [easingthemes/ssh-deploy](https://github.com/easingthemes/ssh-deploy) `v6.0.3`, rsync over SSH. Before rsync, a remote script checks the directory.
 - **Port 22, password** (`SFTP_PASSWORD` and no key): the same rsync flags over SSH.
 - `--delete` applies only inside the validated theme or plugin directory. It does not clean the rest of the account. `dangerous-clean-slate` is not set.

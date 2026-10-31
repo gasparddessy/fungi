@@ -9,6 +9,11 @@
 # passed validate-deploy-target.sh. The parent (wp-content/themes or
 # wp-content/plugins) must already exist. Only the final directory is created.
 # The password is passed through LFTP_PASSWORD (--env-password), not argv.
+#
+# o2switch chroots the FTP login to the account home. A path that starts
+# with /home/<user>/ is the SSH filesystem path and is not visible here.
+# This script drops that prefix and syncs the remainder (public_html/...).
+# Port 22 does not use this script, so SSH still receives absolute paths.
 set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -78,6 +83,38 @@ print_scrubbed() {
 	printf '%s\n' "$text" | grep -F -v -- "$SFTP_PASSWORD" || true
 }
 
+# Turn an SSH-style absolute path into a path relative to the FTP login root.
+# Relative paths are unchanged. The result is validated again, so bridge and
+# bridge-child are still refused.
+ftp_login_path() {
+	local kind="$1"
+	local raw="$2"
+	local path home_prefix
+	# Command substitution does not abort the script on failure. Check it.
+	if ! path=$(bash "$script_dir/validate-deploy-target.sh" "$kind" "$raw"); then
+		exit 1
+	fi
+	path="${path%/}"
+	home_prefix="/home/${SFTP_USER}/"
+	case "$path" in
+		"$home_prefix"*)
+			path="${path#"$home_prefix"}"
+			say_notice "FTP is chrooted to the account home. Using ${path} instead of ${home_prefix}${path}."
+			;;
+		/home/*)
+			say_error "SFTP_PORT 21 paths are relative to the FTP login root. ${path} is not under /home/${SFTP_USER}. Example: public_html/wp-content/themes/refungi-child."
+			exit 1
+			;;
+		/*)
+			path="${path#/}"
+			;;
+	esac
+	if ! path=$(bash "$script_dir/validate-deploy-target.sh" "$kind" "$path"); then
+		exit 1
+	fi
+	printf '%s' "${path%/}"
+}
+
 # Run the lftp commands on stdin. The password stays in the environment.
 ftp_exec() {
 	local stdout_file stderr_file cmd_file status
@@ -107,8 +144,13 @@ sync_one() {
 	local remote_raw="$3"
 	local remote parent base listing status
 
-	remote=$(bash "$script_dir/validate-deploy-target.sh" "$kind" "$remote_raw")
-	remote="${remote%/}"
+	if ! remote=$(ftp_login_path "$kind" "$remote_raw"); then
+		exit 1
+	fi
+	if [ -z "$remote" ]; then
+		say_error "Remote ${kind} path is empty."
+		exit 1
+	fi
 	parent=$(dirname "$remote")
 	base=$(basename "$remote")
 	local_dir="${local_dir%/}"
