@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Password fallback. Prefer SFTP_KEY. This uses rsync over SSH on SFTP_PORT
-# (default 22), which is the same SSH service o2switch uses for SFTP.
-# SamKirkland/FTP-Deploy-Action v4 speaks FTP/FTPS only, so it is not used.
+# Password fallback for SSH. Prefer SFTP_KEY when SFTP_PORT is 22.
+# Plain FTP on port 21 is handled by ftp-password-deploy.sh. This script
+# refuses port 21 so an SSH rsync cannot be aimed at the FTP listener.
 set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -29,6 +29,10 @@ if ! printf '%s' "$SFTP_USER" | grep -Eq '^[A-Za-z0-9._-]+$'; then
 fi
 if ! printf '%s' "$port" | grep -Eq '^[0-9]+$' || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
 	say_error "SFTP_PORT must be a TCP port from 1 to 65535."
+	exit 1
+fi
+if [ "$port" = "21" ]; then
+	say_error "SFTP_PORT 21 is plain FTP. Refusing SSH rsync. The workflow runs ftp-password-deploy.sh for port 21."
 	exit 1
 fi
 

@@ -46,7 +46,7 @@ fi
 if [ "${#missing[@]}" -gt 0 ]; then
 	say_error "Missing GitHub Actions secrets: ${missing[*]}" >&2
 	echo "Add them as repository secrets: Settings → Secrets and variables → Actions." >&2
-	echo "This workflow has no credentials of its own. Prefer SFTP_KEY (unencrypted private key). SFTP_PORT defaults to 22 when unset. SFTP_REMOTE_PLUGIN_PATH is optional." >&2
+	echo "This workflow has no credentials of its own. Prefer SFTP_KEY on port 22. Set SFTP_PORT to 21 and SFTP_PASSWORD to deploy over plain FTP when SSH is blocked. SFTP_PORT defaults to 22 when unset. SFTP_REMOTE_PLUGIN_PATH is optional." >&2
 	exit 1
 fi
 
@@ -74,8 +74,25 @@ else
 	fi
 fi
 
+# Port 21 is plain FTP. Every other port, including the default 22, is SSH.
+# o2switch Autorisation SSH blocks GitHub runners on port 22, and it also
+# blocks FTPS data connections, so port 21 stays unencrypted FTP on purpose.
+transport=ssh
+if [ "$port" = "21" ]; then
+	transport=ftp
+fi
+
 auth=password
-if [ -n "$key" ]; then
+if [ "$transport" = "ftp" ]; then
+	if [ -z "$password" ]; then
+		say_error "SFTP_PORT is 21, which is plain FTP. Set SFTP_PASSWORD (the cPanel password). An SSH key cannot log in on this port." >&2
+		echo "Leave SFTP_KEY empty for this deploy. Port 22 with SFTP_KEY remains the path to use when SSH is reachable." >&2
+		exit 1
+	fi
+	if [ -n "$key" ]; then
+		say_notice "SFTP_PORT is 21, so SFTP_KEY is ignored and the deploy uses plain FTP with SFTP_PASSWORD." >&2
+	fi
+elif [ -n "$key" ]; then
 	auth=key
 	case "$key" in
 		*"PRIVATE KEY"*) ;;
@@ -120,10 +137,11 @@ else
 	say_notice "SFTP_REMOTE_PLUGIN_PATH is not set. The child theme will deploy and the custom plugin step will be skipped." >&2
 fi
 
-echo "Deploy preflight ok. auth=${auth} host=${host} port=${port} user=${user} theme=${theme_path} plugin=${plugin_path:-skipped}"
+echo "Deploy preflight ok. transport=${transport} auth=${auth} host=${host} port=${port} user=${user} theme=${theme_path} plugin=${plugin_path:-skipped}"
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
 	{
+		echo "transport=${transport}"
 		echo "auth=${auth}"
 		echo "port=${port}"
 		echo "theme_path=${theme_path}"
@@ -135,6 +153,7 @@ fi
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 	{
 		echo "### Deploy preflight"
+		echo "- Transport: \`${transport}\`"
 		echo "- Auth: \`${auth}\`"
 		echo "- Host: \`${host}\`"
 		echo "- Port: \`${port}\`"

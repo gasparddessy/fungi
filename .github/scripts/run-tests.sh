@@ -21,6 +21,7 @@ for script in \
 	.github/scripts/deploy-preflight.sh \
 	.github/scripts/ssh-key-guard.sh \
 	.github/scripts/sftp-password-deploy.sh \
+	.github/scripts/ftp-password-deploy.sh \
 	.github/scripts/rsync-flags.sh
 do
 	bash -n "$script"
@@ -82,7 +83,15 @@ expect_bad plugin "/"
 expect_bad theme "public_html/wp-content/themes/refungi-child/../../../"
 
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+ftp_pid=""
+cleanup() {
+	if [ -n "${ftp_pid:-}" ]; then
+		kill "$ftp_pid" 2>/dev/null || true
+		wait "$ftp_pid" 2>/dev/null || true
+	fi
+	rm -rf "$tmp"
+}
+trap cleanup EXIT
 
 mkdir -p "$tmp/site/public_html/wp-content/themes" "$tmp/site/public_html/wp-content/plugins"
 bash "$guard" "$tmp/site/public_html/wp-content/themes/refungi-child" >/dev/null
@@ -171,6 +180,7 @@ run_preflight \
 	"$ok_out" \
 	"$ok_summary" >/dev/null
 grep -q '^auth=key$' "$ok_out" || fail "key auth was not selected"
+grep -q '^transport=ssh$' "$ok_out" || fail "empty SFTP_PORT did not stay on SSH"
 grep -q '^port=22$' "$ok_out" || fail "empty SFTP_PORT did not default to 22"
 grep -q '^theme_path=public_html/wp-content/themes/refungi-child/$' "$ok_out" || fail "theme path was not normalized"
 grep -q '^deploy_plugin=false$' "$ok_out" || fail "plugin deploy should be skipped when unset"
@@ -192,6 +202,7 @@ run_preflight \
 	"public_html/wp-content/plugins/refungi-custom" \
 	"$both_out" >/dev/null
 grep -q '^auth=key$' "$both_out" || fail "key should win when both secrets are set"
+grep -q '^transport=ssh$' "$both_out" || fail "port 22 with a key should stay on SSH"
 grep -q '^deploy_plugin=true$' "$both_out" || fail "plugin path should deploy when set"
 grep -q '^plugin_path=public_html/wp-content/plugins/refungi-custom/$' "$both_out" || fail "plugin path was not normalized"
 grep -F -q "$secret_password" "$both_out" && fail "preflight output contains the password"
@@ -210,6 +221,7 @@ run_preflight \
 	"" \
 	"$pass_out" >/dev/null
 grep -q '^auth=password$' "$pass_out" || fail "password auth was not selected"
+grep -q '^transport=ssh$' "$pass_out" || fail "a custom SSH port should stay on SSH"
 grep -q '^port=2222$' "$pass_out" || fail "custom port was not kept"
 grep -F -q "$secret_password" "$pass_out" && fail "password auth output contains the password"
 pass=$((pass + 1))
@@ -355,6 +367,307 @@ printf '%s' "$inject_err" | grep -q "SFTP_PORT" || fail "unsafe port error did n
 printf '%s' "$inject_err" | grep -q "touch" && fail "unsafe port was echoed in a way that could hide the rejection"
 pass=$((pass + 1))
 
+set +e
+port21_ssh_err=$(
+	env \
+		SFTP_HOST='example.com' \
+		SFTP_USER='crch2121' \
+		SFTP_PASSWORD='not-used' \
+		SFTP_PORT='21' \
+		THEME_PATH='public_html/wp-content/themes/refungi-child' \
+		DEPLOY_PLUGIN='false' \
+		bash "$script_dir/sftp-password-deploy.sh" 2>&1
+)
+port21_ssh_status=$?
+set -e
+[ "$port21_ssh_status" -ne 0 ] || fail "SSH password deploy accepted port 21"
+printf '%s' "$port21_ssh_err" | grep -q "plain FTP" || fail "port 21 SSH refusal did not name plain FTP"
+pass=$((pass + 1))
+
+ftp_out="$tmp/ftp-output"
+: >"$ftp_out"
+run_preflight \
+	"crch2121.odns.fr" \
+	"21" \
+	"crch2121" \
+	"$secret_password" \
+	"" \
+	"/home/crch2121/public_html/wp-content/themes/refungi-child" \
+	"/home/crch2121/public_html/wp-content/plugins/refungi-custom" \
+	"$ftp_out" >/dev/null
+grep -q '^transport=ftp$' "$ftp_out" || fail "port 21 did not select FTP"
+grep -q '^auth=password$' "$ftp_out" || fail "port 21 did not select password auth"
+grep -q '^port=21$' "$ftp_out" || fail "port 21 was not kept"
+grep -q '^theme_path=/home/crch2121/public_html/wp-content/themes/refungi-child/$' "$ftp_out" || fail "FTP theme path was not normalized"
+grep -q '^plugin_path=/home/crch2121/public_html/wp-content/plugins/refungi-custom/$' "$ftp_out" || fail "FTP plugin path was not normalized"
+grep -F -q "$secret_password" "$ftp_out" && fail "FTP preflight output contains the password"
+pass=$((pass + 1))
+
+# A leftover SSH key must not block the FTP path, and it must not be validated or echoed.
+ftp_both="$tmp/ftp-both-output"
+: >"$ftp_both"
+run_preflight \
+	"crch2121.odns.fr" \
+	"21" \
+	"crch2121" \
+	"$secret_password" \
+	"not-a-private-key" \
+	"/home/crch2121/public_html/wp-content/themes/refungi-child/" \
+	"" \
+	"$ftp_both" >/dev/null
+grep -q '^transport=ftp$' "$ftp_both" || fail "port 21 with a leftover key did not stay on FTP"
+grep -q '^auth=password$' "$ftp_both" || fail "port 21 should ignore the SSH key"
+grep -q '^deploy_plugin=false$' "$ftp_both" || fail "FTP preflight deployed the plugin with an empty path"
+grep -F -q "not-a-private-key" "$ftp_both" && fail "FTP preflight output contains the ignored key"
+grep -F -q "$secret_password" "$ftp_both" && fail "FTP preflight output contains the password"
+pass=$((pass + 1))
+
+ftp_key_only="$tmp/ftp-key-only-output"
+: >"$ftp_key_only"
+set +e
+ftp_key_err=$(
+	run_preflight \
+		"crch2121.odns.fr" \
+		"21" \
+		"crch2121" \
+		"" \
+		"$good_key" \
+		"/home/crch2121/public_html/wp-content/themes/refungi-child" \
+		"" \
+		"$ftp_key_only" 2>&1
+)
+ftp_key_status=$?
+set -e
+[ "$ftp_key_status" -ne 0 ] || fail "port 21 accepted an SSH key without a password"
+printf '%s' "$ftp_key_err" | grep -q "SFTP_PASSWORD" || fail "port 21 key-only error did not name SFTP_PASSWORD"
+grep -F -q "$key_sample" <<<"$ftp_key_err" && fail "port 21 key-only error printed the private key"
+[ ! -s "$ftp_key_only" ] || fail "preflight wrote outputs for FTP without a password"
+pass=$((pass + 1))
+
+# Fake lftp records the generated session and answers directory probes.
+fake_bin="$tmp/bin"
+mkdir -p "$fake_bin"
+cat >"$fake_bin/lftp" <<'EOF'
+#!/usr/bin/env bash
+set +H
+printf '%s\n' "$@" >>"${FAKE_LFTP_ARGS:?}"
+script=""
+while [ $# -gt 0 ]; do
+	if [ "$1" = "-e" ]; then
+		shift
+		script=${1#source }
+		script=${script# }
+		break
+	fi
+	shift
+done
+{
+	echo "===== CALL ====="
+	cat "$script"
+} >>"${FAKE_LFTP_SCRIPTS:?}"
+if [ -f "${HOME}/.lftprc" ] && grep -q 'ftp:ssl-allow false' "${HOME}/.lftprc"; then
+	echo "ssl-off" >>"${FAKE_LFTP_NOTES:?}"
+else
+	echo "ssl-not-disabled" >>"${FAKE_LFTP_NOTES:?}"
+fi
+if grep -F -q -- "${FAKE_LFTP_SECRET:?}" "${FAKE_LFTP_ARGS:?}" "${FAKE_LFTP_SCRIPTS:?}" "${HOME}/.lftprc"; then
+	echo "SECRET_LEAK" >>"${FAKE_LFTP_NOTES:?}"
+fi
+if grep -q 'mirror --reverse --delete' "$script"; then
+	echo "mirror" >>"${FAKE_LFTP_CALLS:?}"
+	exit 0
+fi
+if grep -q 'mkdir "' "$script"; then
+	echo "mkdir" >>"${FAKE_LFTP_CALLS:?}"
+	exit 0
+fi
+if grep -q 'cls -ld' "$script"; then
+	base=$(sed -n 's/.*cls -ld "\([^"]*\)".*/\1/p' "$script")
+	case "${FAKE_LFTP_MODE:?}" in
+		noparent)
+			echo "cd: Access failed: 550 No such file or directory." >&2
+			exit 1
+			;;
+		login-failed)
+			echo "Login failed: 530 Authentication failed." >&2
+			exit 1
+			;;
+		symlink)
+			echo PARENT_OK
+			echo "lrwxrwxrwx 1 user user 6 Oct 31 00:00 ${base} -> bridge"
+			exit 0
+			;;
+		file)
+			echo PARENT_OK
+			echo "-rw-r--r-- 1 user user 10 Oct 31 00:00 ${base}"
+			exit 0
+			;;
+		plugin-missing)
+			echo PARENT_OK
+			if [ "$base" = "refungi-custom" ]; then
+				echo "Access failed: 550 No such file or directory. (${base})" >&2
+				exit 1
+			fi
+			echo "drwxr-xr-x 2 user user 4096 Oct 31 00:00 ${base}"
+			exit 0
+			;;
+		*)
+			echo PARENT_OK
+			echo "drwxr-xr-x 2 user user 4096 Oct 31 00:00 ${base}"
+			exit 0
+			;;
+	esac
+fi
+echo "unexpected lftp script" >&2
+exit 1
+EOF
+chmod +x "$fake_bin/lftp"
+
+run_fake_ftp() {
+	local mode="$1"
+	: >"$FAKE_LFTP_ARGS"
+	: >"$FAKE_LFTP_SCRIPTS"
+	: >"$FAKE_LFTP_CALLS"
+	: >"$FAKE_LFTP_NOTES"
+	env \
+		LFTP_BIN="$fake_bin/lftp" \
+		FAKE_LFTP_MODE="$mode" \
+		FAKE_LFTP_ARGS="$FAKE_LFTP_ARGS" \
+		FAKE_LFTP_SCRIPTS="$FAKE_LFTP_SCRIPTS" \
+		FAKE_LFTP_CALLS="$FAKE_LFTP_CALLS" \
+		FAKE_LFTP_NOTES="$FAKE_LFTP_NOTES" \
+		FAKE_LFTP_SECRET="$secret_password" \
+		SFTP_HOST="crch2121.odns.fr" \
+		SFTP_PORT="21" \
+		SFTP_USER="crch2121" \
+		SFTP_PASSWORD="$secret_password" \
+		THEME_PATH="/home/crch2121/public_html/wp-content/themes/refungi-child/" \
+		PLUGIN_PATH="/home/crch2121/public_html/wp-content/plugins/refungi-custom/" \
+		DEPLOY_PLUGIN="true" \
+		bash "$script_dir/ftp-password-deploy.sh"
+}
+
+FAKE_LFTP_ARGS="$tmp/lftp-args"
+FAKE_LFTP_SCRIPTS="$tmp/lftp-scripts"
+FAKE_LFTP_CALLS="$tmp/lftp-calls"
+FAKE_LFTP_NOTES="$tmp/lftp-notes"
+
+run_fake_ftp dir >/dev/null
+grep -q 'ssl-off' "$FAKE_LFTP_NOTES" || fail "FTP session did not disable TLS before connect"
+grep -q 'SECRET_LEAK' "$FAKE_LFTP_NOTES" && fail "FTP password appeared in argv, the lftp script, or the rc file"
+grep -q 'mirror --reverse --delete' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror is missing --delete"
+grep -q -- '--exclude-glob node_modules/' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror does not exclude node_modules"
+grep -q -- '--exclude-glob .git/' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror does not exclude .git"
+grep -q -- '--exclude-glob .github/' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror does not exclude .github"
+grep -F -q '/home/crch2121/public_html/wp-content/themes/refungi-child/' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror target is not the child theme"
+grep -F -q '/home/crch2121/public_html/wp-content/plugins/refungi-custom/' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror target is not the custom plugin"
+grep -F -q 'themes/refungi-child/' "$FAKE_LFTP_SCRIPTS" || fail "FTP mirror source is not the child theme"
+grep -q 'mkdir ' "$FAKE_LFTP_SCRIPTS" && fail "FTP mkdir ran for directories that already exist"
+grep -q -- '--env-password' "$FAKE_LFTP_ARGS" || fail "lftp was not started with --env-password"
+pass=$((pass + 1))
+
+run_fake_ftp plugin-missing >/dev/null
+grep -F -q 'mkdir "refungi-custom"' "$FAKE_LFTP_SCRIPTS" || fail "missing plugin directory was not created"
+grep -F -q 'mkdir -p' "$FAKE_LFTP_SCRIPTS" && fail "FTP mkdir -p would create parent directories"
+grep -F -q 'mkdir "themes"' "$FAKE_LFTP_SCRIPTS" && fail "FTP mkdir targeted the themes directory"
+grep -F -q 'mkdir "refungi-child"' "$FAKE_LFTP_SCRIPTS" && fail "existing theme directory was created again"
+pass=$((pass + 1))
+
+set +e
+symlink_err=$(run_fake_ftp symlink 2>&1)
+symlink_status=$?
+set -e
+[ "$symlink_status" -ne 0 ] || fail "FTP deploy followed a symlink"
+printf '%s' "$symlink_err" | grep -q "symlink" || fail "symlink refusal did not say symlink"
+grep -q 'mirror --reverse' "$FAKE_LFTP_SCRIPTS" && fail "FTP mirror ran after a symlink listing"
+pass=$((pass + 1))
+
+set +e
+file_err=$(run_fake_ftp file 2>&1)
+file_status=$?
+set -e
+[ "$file_status" -ne 0 ] || fail "FTP deploy accepted a file where the theme directory should be"
+printf '%s' "$file_err" | grep -q "not a directory" || fail "file refusal did not say not a directory"
+grep -q 'mirror --reverse' "$FAKE_LFTP_SCRIPTS" && fail "FTP mirror ran for a non-directory"
+pass=$((pass + 1))
+
+set +e
+parent_err=$(run_fake_ftp noparent 2>&1)
+parent_status=$?
+set -e
+[ "$parent_status" -ne 0 ] || fail "FTP deploy created a missing parent"
+printf '%s' "$parent_err" | grep -q "Parent directory does not exist" || fail "missing parent error was not specific"
+grep -q 'mkdir ' "$FAKE_LFTP_SCRIPTS" && fail "FTP mkdir ran when the parent was missing"
+grep -q 'mirror --reverse' "$FAKE_LFTP_SCRIPTS" && fail "FTP mirror ran when the parent was missing"
+pass=$((pass + 1))
+
+set +e
+login_err=$(run_fake_ftp login-failed 2>&1)
+login_status=$?
+set -e
+[ "$login_status" -ne 0 ] || fail "FTP deploy succeeded after a login failure"
+printf '%s' "$login_err" | grep -q "FTP login failed" || fail "login failure was reported as a missing directory"
+grep -F -q "$secret_password" <<<"$login_err" && fail "login error printed the password"
+pass=$((pass + 1))
+
+: >"$FAKE_LFTP_ARGS"
+: >"$FAKE_LFTP_SCRIPTS"
+: >"$FAKE_LFTP_CALLS"
+: >"$FAKE_LFTP_NOTES"
+set +e
+ftp_inject_err=$(
+	env \
+		LFTP_BIN="$fake_bin/lftp" \
+		FAKE_LFTP_MODE="dir" \
+		FAKE_LFTP_ARGS="$FAKE_LFTP_ARGS" \
+		FAKE_LFTP_SCRIPTS="$FAKE_LFTP_SCRIPTS" \
+		FAKE_LFTP_CALLS="$FAKE_LFTP_CALLS" \
+		FAKE_LFTP_NOTES="$FAKE_LFTP_NOTES" \
+		FAKE_LFTP_SECRET="$secret_password" \
+		SFTP_HOST='crch2121.odns.fr' \
+		SFTP_USER='crch2121' \
+		SFTP_PASSWORD="$secret_password" \
+		SFTP_PORT='21;touch' \
+		THEME_PATH='/home/crch2121/public_html/wp-content/themes/refungi-child' \
+		DEPLOY_PLUGIN='false' \
+		bash "$script_dir/ftp-password-deploy.sh" 2>&1
+)
+ftp_inject_status=$?
+set -e
+[ "$ftp_inject_status" -ne 0 ] || fail "FTP deploy accepted an unsafe port"
+printf '%s' "$ftp_inject_err" | grep -q "SFTP_PORT" || fail "unsafe FTP port error did not name SFTP_PORT"
+[ ! -s "$FAKE_LFTP_CALLS" ] || fail "unsafe FTP port still invoked lftp"
+pass=$((pass + 1))
+
+: >"$FAKE_LFTP_ARGS"
+: >"$FAKE_LFTP_SCRIPTS"
+: >"$FAKE_LFTP_CALLS"
+: >"$FAKE_LFTP_NOTES"
+set +e
+bridge_err=$(
+	env \
+		LFTP_BIN="$fake_bin/lftp" \
+		FAKE_LFTP_MODE="dir" \
+		FAKE_LFTP_ARGS="$FAKE_LFTP_ARGS" \
+		FAKE_LFTP_SCRIPTS="$FAKE_LFTP_SCRIPTS" \
+		FAKE_LFTP_CALLS="$FAKE_LFTP_CALLS" \
+		FAKE_LFTP_NOTES="$FAKE_LFTP_NOTES" \
+		FAKE_LFTP_SECRET="$secret_password" \
+		SFTP_HOST='crch2121.odns.fr' \
+		SFTP_USER='crch2121' \
+		SFTP_PASSWORD="$secret_password" \
+		SFTP_PORT='21' \
+		THEME_PATH='/home/crch2121/public_html/wp-content/themes/bridge-child' \
+		DEPLOY_PLUGIN='false' \
+		bash "$script_dir/ftp-password-deploy.sh" 2>&1
+)
+bridge_status=$?
+set -e
+[ "$bridge_status" -ne 0 ] || fail "FTP deploy accepted bridge-child"
+printf '%s' "$bridge_err" | grep -q "wp-content/themes/refungi-child" || fail "unsafe FTP path error did not name the required suffix"
+grep -q 'mirror --reverse' "$FAKE_LFTP_SCRIPTS" && fail "FTP mirror ran for bridge-child"
+pass=$((pass + 1))
+
 # shellcheck disable=SC1091
 source "$script_dir/rsync-flags.sh"
 [ -n "$RSYNC_DELETE_FLAGS" ] || fail "rsync flags are empty"
@@ -369,6 +682,10 @@ grep -q "secrets.SFTP_KEY" .github/workflows/deploy.yml || fail "workflow does n
 grep -q "secrets.SFTP_PASSWORD" .github/workflows/deploy.yml || fail "workflow does not read SFTP_PASSWORD from secrets"
 grep -q "secrets.SFTP_REMOTE_THEME_PATH" .github/workflows/deploy.yml || fail "workflow does not read the theme path secret"
 grep -q "secrets.SFTP_REMOTE_PLUGIN_PATH" .github/workflows/deploy.yml || fail "workflow does not read the plugin path secret"
+grep -q "ftp-password-deploy.sh" .github/workflows/deploy.yml || fail "workflow does not run the FTP deploy"
+grep -q "transport == 'ssh'" .github/workflows/deploy.yml || fail "SSH steps are not limited to the SSH transport"
+grep -q "transport == 'ftp'" .github/workflows/deploy.yml || fail "FTP step is not limited to port 21"
+grep -q "sftp-password-deploy.sh" .github/workflows/deploy.yml || fail "SSH password path was removed"
 pass=$((pass + 1))
 
 grep -q '^Theme Name: Refungi Child$' themes/refungi-child/style.css || fail "theme name header missing"
@@ -387,7 +704,118 @@ for secret_name in SFTP_HOST SFTP_PORT SFTP_USER SFTP_PASSWORD SFTP_KEY SFTP_REM
 done
 grep -q '^Template: bridge$' README.md || fail "README does not record Template: bridge"
 grep -q "JetBackup" README.md || fail "README does not mention JetBackup"
+grep -q 'crch2121.odns.fr' README.md || fail "README does not document the FTP host"
+grep -q '/home/crch2121/public_html/wp-content/themes/refungi-child' README.md || fail "README does not document the live theme path"
+grep -q '/home/crch2121/public_html/wp-content/plugins/refungi-custom' README.md || fail "README does not document the live plugin path"
+grep -q 'plain FTP' README.md || fail "README does not document plain FTP on port 21"
 pass=$((pass + 1))
+
+if command -v lftp >/dev/null 2>&1 && python3 -c 'import pyftpdlib' >/dev/null 2>&1; then
+	ftp_root="$tmp/ftproot"
+	mkdir -p \
+		"$ftp_root/home/crch2121/public_html/wp-content/themes/bridge" \
+		"$ftp_root/home/crch2121/public_html/wp-content/themes/bridge-child" \
+		"$ftp_root/home/crch2121/public_html/wp-content/themes/refungi-child/assets/css" \
+		"$ftp_root/home/crch2121/public_html/wp-content/plugins/woocommerce" \
+		"$ftp_root/home/crch2121/public_html/wp-content/uploads"
+	echo keep-bridge >"$ftp_root/home/crch2121/public_html/wp-content/themes/bridge/keep.txt"
+	echo keep-bridge-child >"$ftp_root/home/crch2121/public_html/wp-content/themes/bridge-child/keep.txt"
+	echo stale >"$ftp_root/home/crch2121/public_html/wp-content/themes/refungi-child/old.css"
+	echo stale >"$ftp_root/home/crch2121/public_html/wp-content/themes/refungi-child/assets/css/stale.css"
+	echo keep-woo >"$ftp_root/home/crch2121/public_html/wp-content/plugins/woocommerce/keep.txt"
+	echo keep-uploads >"$ftp_root/home/crch2121/public_html/wp-content/uploads/keep.txt"
+	printf '%s' 'ftp-test-password' >"$tmp/ftp-password"
+	cat >"$tmp/ftpd.py" <<'PY'
+import sys
+from pyftpdlib.authorizers import DummyAuthorizer
+from pyftpdlib.handlers import FTPHandler
+from pyftpdlib.servers import FTPServer
+
+root = sys.argv[1]
+password = open(sys.argv[2], encoding="utf-8").read()
+auth = DummyAuthorizer()
+auth.add_user("crch2121", password, root, perm="elradfmw")
+handler = FTPHandler
+handler.authorizer = auth
+handler.passive_ports = range(52100, 52140)
+server = FTPServer(("127.0.0.1", 0), handler)
+print(server.socket.getsockname()[1], flush=True)
+server.serve_forever()
+PY
+	python3 "$tmp/ftpd.py" "$ftp_root" "$tmp/ftp-password" >"$tmp/ftp-port" 2>"$tmp/ftpd.log" &
+	ftp_pid=$!
+	for _ in $(seq 1 50); do
+		if [ -s "$tmp/ftp-port" ] && grep -Eq '^[0-9]+$' "$tmp/ftp-port"; then
+			break
+		fi
+		sleep 0.05
+	done
+	ftp_port=$(head -1 "$tmp/ftp-port")
+	grep -Eq '^[0-9]+$' <<<"$ftp_port" || fail "local FTP server did not publish a port"
+	env \
+		SFTP_HOST="127.0.0.1" \
+		SFTP_PORT="$ftp_port" \
+		REFUGI_FTP_TEST_PORT="$ftp_port" \
+		SFTP_USER="crch2121" \
+		SFTP_PASSWORD="ftp-test-password" \
+		THEME_PATH="/home/crch2121/public_html/wp-content/themes/refungi-child" \
+		PLUGIN_PATH="/home/crch2121/public_html/wp-content/plugins/refungi-custom" \
+		DEPLOY_PLUGIN="true" \
+		bash "$script_dir/ftp-password-deploy.sh" >/dev/null
+	theme_remote="$ftp_root/home/crch2121/public_html/wp-content/themes/refungi-child"
+	plugin_remote="$ftp_root/home/crch2121/public_html/wp-content/plugins/refungi-custom"
+	[ ! -e "$theme_remote/old.css" ] || fail "FTP mirror left a file that is not in Git"
+	[ ! -e "$theme_remote/assets/css/stale.css" ] || fail "FTP mirror left a nested file that is not in Git"
+	grep -q '^Theme Name: Refungi Child$' "$theme_remote/style.css" || fail "FTP mirror did not upload style.css"
+	grep -q 'Plugin Name: Refungi Custom' "$plugin_remote/refungi-custom.php" || fail "FTP mirror did not create the custom plugin"
+	[ "$(cat "$ftp_root/home/crch2121/public_html/wp-content/themes/bridge/keep.txt")" = "keep-bridge" ] || fail "FTP mirror changed the Bridge parent theme"
+	[ "$(cat "$ftp_root/home/crch2121/public_html/wp-content/themes/bridge-child/keep.txt")" = "keep-bridge-child" ] || fail "FTP mirror changed bridge-child"
+	[ "$(cat "$ftp_root/home/crch2121/public_html/wp-content/plugins/woocommerce/keep.txt")" = "keep-woo" ] || fail "FTP mirror changed another plugin"
+	[ "$(cat "$ftp_root/home/crch2121/public_html/wp-content/uploads/keep.txt")" = "keep-uploads" ] || fail "FTP mirror changed uploads"
+	[ ! -d "$theme_remote/node_modules" ] || fail "FTP mirror uploaded node_modules"
+	[ ! -d "$theme_remote/refungi-child" ] || fail "FTP mirror nested the theme directory inside itself"
+	kill "$ftp_pid" 2>/dev/null || true
+	wait "$ftp_pid" 2>/dev/null || true
+	ftp_pid=""
+
+	bare_root="$tmp/bare-ftproot"
+	mkdir -p "$bare_root/home/crch2121/public_html/wp-content"
+	python3 "$tmp/ftpd.py" "$bare_root" "$tmp/ftp-password" >"$tmp/ftp-port-bare" 2>"$tmp/ftpd-bare.log" &
+	ftp_pid=$!
+	for _ in $(seq 1 50); do
+		if [ -s "$tmp/ftp-port-bare" ] && grep -Eq '^[0-9]+$' "$tmp/ftp-port-bare"; then
+			break
+		fi
+		sleep 0.05
+	done
+	bare_port=$(head -1 "$tmp/ftp-port-bare")
+	set +e
+	bare_err=$(
+		env \
+			SFTP_HOST="127.0.0.1" \
+			SFTP_PORT="$bare_port" \
+			REFUGI_FTP_TEST_PORT="$bare_port" \
+			SFTP_USER="crch2121" \
+			SFTP_PASSWORD="ftp-test-password" \
+			THEME_PATH="/home/crch2121/public_html/wp-content/themes/refungi-child" \
+			DEPLOY_PLUGIN="false" \
+			bash "$script_dir/ftp-password-deploy.sh" 2>&1
+	)
+	bare_status=$?
+	set -e
+	[ "$bare_status" -ne 0 ] || fail "FTP deploy created a missing themes directory"
+	printf '%s' "$bare_err" | grep -q "Parent directory does not exist" || fail "missing themes directory was not reported"
+	[ ! -e "$bare_root/home/crch2121/public_html/wp-content/themes" ] || fail "FTP deploy created wp-content/themes"
+	grep -F -q 'ftp-test-password' <<<"$bare_err" && fail "FTP error output contains the password"
+	kill "$ftp_pid" 2>/dev/null || true
+	wait "$ftp_pid" 2>/dev/null || true
+	ftp_pid=""
+	pass=$((pass + 1))
+elif [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+	fail "lftp and python3-pyftpdlib are required on CI to test the FTP deploy"
+else
+	echo "Skipping local FTP mirror test (lftp or pyftpdlib is not installed)."
+fi
 
 if grep -R -n -E 'BEGIN (OPENSSH|RSA|EC|OPENSSH) PRIVATE KEY' \
 	--exclude-dir=.git \
