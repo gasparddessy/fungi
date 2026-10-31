@@ -2,11 +2,12 @@
 # Credentials come from GitHub Actions repository secrets. Nothing in this
 # file is a password, key, or hostname.
 #
-# SSH/SFTP on port 22 is intentional. SamKirkland/FTP-Deploy-Action v4 speaks
-# FTP and FTPS only (SFTP was removed), so the key path uses
-# easingthemes/ssh-deploy (rsync over SSH). Password auth is a fallback that
-# uses the same rsync flags. --delete is scoped to the validated directory.
-# dangerous-clean-slate is not used.
+# Port 22 (the default) is SSH. Key auth uses easingthemes/ssh-deploy.
+# Password auth on any port other than 21 uses the same rsync flags.
+# Port 21 is plain FTP via lftp. o2switch Autorisation SSH blocks GitHub
+# runners on port 22, and FTPS data connections use that same allowlist, so
+# FTPS is not the fallback. mirror --delete is scoped to the validated
+# directory. dangerous-clean-slate is not used.
 
 name: Deploy custom code
 
@@ -47,11 +48,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install PHP
+      - name: Install PHP and FTP test tools
         run: |
-          if ! command -v php >/dev/null 2>&1; then
+          if ! command -v php >/dev/null 2>&1 || ! command -v lftp >/dev/null 2>&1 || ! python3 -c 'import pyftpdlib' >/dev/null 2>&1; then
             sudo DEBIAN_FRONTEND=noninteractive apt-get update
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y php-cli
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y php-cli lftp python3-pyftpdlib
           fi
 
       - name: Syntax and deploy-target tests
@@ -86,7 +87,7 @@ jobs:
         run: bash .github/scripts/deploy-preflight.sh
 
       - name: Confirm remote theme directory (SSH key)
-        if: ${{ steps.preflight.outputs.auth == 'key' }}
+        if: ${{ steps.preflight.outputs.transport == 'ssh' && steps.preflight.outputs.auth == 'key' }}
         env:
           SFTP_HOST: ${{ secrets.SFTP_HOST }}
           SFTP_PORT: ${{ steps.preflight.outputs.port }}
@@ -95,7 +96,7 @@ jobs:
         run: bash .github/scripts/ssh-key-guard.sh "${{ steps.preflight.outputs.theme_path }}"
 
       - name: Deploy child theme (SSH key)
-        if: ${{ steps.preflight.outputs.auth == 'key' }}
+        if: ${{ steps.preflight.outputs.transport == 'ssh' && steps.preflight.outputs.auth == 'key' }}
         uses: easingthemes/ssh-deploy@v6.0.3
         with:
           SSH_PRIVATE_KEY: ${{ secrets.SFTP_KEY }}
@@ -109,7 +110,7 @@ jobs:
           SSH_CMD_ARGS: "-o StrictHostKeyChecking=accept-new, -o ConnectTimeout=20"
 
       - name: Confirm remote plugin directory (SSH key)
-        if: ${{ steps.preflight.outputs.auth == 'key' && steps.preflight.outputs.deploy_plugin == 'true' }}
+        if: ${{ steps.preflight.outputs.transport == 'ssh' && steps.preflight.outputs.auth == 'key' && steps.preflight.outputs.deploy_plugin == 'true' }}
         env:
           SFTP_HOST: ${{ secrets.SFTP_HOST }}
           SFTP_PORT: ${{ steps.preflight.outputs.port }}
@@ -118,7 +119,7 @@ jobs:
         run: bash .github/scripts/ssh-key-guard.sh "${{ steps.preflight.outputs.plugin_path }}"
 
       - name: Deploy custom plugin (SSH key)
-        if: ${{ steps.preflight.outputs.auth == 'key' && steps.preflight.outputs.deploy_plugin == 'true' }}
+        if: ${{ steps.preflight.outputs.transport == 'ssh' && steps.preflight.outputs.auth == 'key' && steps.preflight.outputs.deploy_plugin == 'true' }}
         uses: easingthemes/ssh-deploy@v6.0.3
         with:
           SSH_PRIVATE_KEY: ${{ secrets.SFTP_KEY }}
@@ -132,7 +133,7 @@ jobs:
           SSH_CMD_ARGS: "-o StrictHostKeyChecking=accept-new, -o ConnectTimeout=20"
 
       - name: Deploy over SSH with password
-        if: ${{ steps.preflight.outputs.auth == 'password' }}
+        if: ${{ steps.preflight.outputs.transport == 'ssh' && steps.preflight.outputs.auth == 'password' }}
         env:
           SFTP_HOST: ${{ secrets.SFTP_HOST }}
           SFTP_PORT: ${{ steps.preflight.outputs.port }}
@@ -142,3 +143,15 @@ jobs:
           PLUGIN_PATH: ${{ steps.preflight.outputs.plugin_path }}
           DEPLOY_PLUGIN: ${{ steps.preflight.outputs.deploy_plugin }}
         run: bash .github/scripts/sftp-password-deploy.sh
+
+      - name: Deploy over plain FTP (port 21)
+        if: ${{ steps.preflight.outputs.transport == 'ftp' }}
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_PORT: ${{ steps.preflight.outputs.port }}
+          SFTP_USER: ${{ secrets.SFTP_USER }}
+          SFTP_PASSWORD: ${{ secrets.SFTP_PASSWORD }}
+          THEME_PATH: ${{ steps.preflight.outputs.theme_path }}
+          PLUGIN_PATH: ${{ steps.preflight.outputs.plugin_path }}
+          DEPLOY_PLUGIN: ${{ steps.preflight.outputs.deploy_plugin }}
+        run: bash .github/scripts/ftp-password-deploy.sh
